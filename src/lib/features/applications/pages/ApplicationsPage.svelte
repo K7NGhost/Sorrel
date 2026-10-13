@@ -5,8 +5,11 @@
   import ApplicationBoard from "../components/ApplicationBoard.svelte";
   import ApplicationDetailsDialog from "../components/ApplicationDetailsDialog.svelte";
   import ApplicationContextMenu from "../components/ApplicationContextMenu.svelte";
+  import EditApplicationDialog from "../components/EditApplicationDialog.svelte";
+  import DeleteApplicationDialog from "../components/DeleteApplicationDialog.svelte";
+  import NotificationToast from "$lib/shared/components/NotificationToast.svelte";
   import { planPlacement } from "../state/placement";
-  import { createApplication, listApplications, moveApplication, updateApplicationDetails } from "../services/applications";
+  import { createApplication, listApplications, moveApplication, updateApplicationDetails, updateApplication, deleteApplication } from "../services/applications";
   import { applicationColumns, type ApplicationStatus, type JobApplication, type NewApplication } from "../types";
 
   let applications = $state<JobApplication[]>([]);
@@ -21,6 +24,9 @@
   let addDialog: AddApplicationDialog;
   let detailsDialog: ApplicationDetailsDialog;
   let contextMenu: ApplicationContextMenu;
+  let editDialog: EditApplicationDialog;
+  let deleteDialog: DeleteApplicationDialog;
+  let message = $state("");
   let filtered = $derived(applications.filter((application) =>
     `${application.company} ${application.role}`.toLowerCase().includes(search.trim().toLowerCase())));
 
@@ -86,6 +92,39 @@
     if (current && !busy && !interacting) detailsDialog.open(current);
   }
 
+  function showEdit(application: JobApplication) {
+    const current = applications.find((item) => item.id === application.id);
+    if (current && !busy && !interacting) editDialog.open(current);
+  }
+
+  function showDelete(application: JobApplication) {
+    const current = applications.find((item) => item.id === application.id);
+    if (current && !busy && !interacting) deleteDialog.open(current);
+  }
+
+  async function edit(id: string, input: NewApplication) {
+    if (busy || !ready || interacting) throw new Error("Please wait until the board is ready.");
+    if (!applications.some((item) => item.id === id)) throw new Error("This application could not be found.");
+    busy = true;
+    message = "";
+    try {
+      const updated = await updateApplication(id, input);
+      applications = applications.map((item) => item.id === id ? { ...item, ...updated } : item);
+      message = "Application updated.";
+    } finally { busy = false; }
+  }
+
+  async function remove(id: string) {
+    if (busy || !ready || interacting) throw new Error("Please wait until the board is ready.");
+    busy = true;
+    message = "";
+    try {
+      await deleteApplication(id);
+      applications = applications.filter((item) => item.id !== id);
+      message = "Application deleted.";
+    } finally { busy = false; }
+  }
+
   function showContext(application: JobApplication, event: MouseEvent | KeyboardEvent) {
     event.preventDefault();
     if (busy || interacting) return;
@@ -147,4 +186,7 @@
 
 <AddApplicationDialog bind:this={addDialog} onsave={add} />
 <ApplicationDetailsDialog bind:this={detailsDialog} onsave={saveDetails} />
-<ApplicationContextMenu bind:this={contextMenu} ondetails={showDetails} />
+<ApplicationContextMenu bind:this={contextMenu} ondetails={showDetails} onedit={showEdit} ondelete={showDelete} />
+<EditApplicationDialog bind:this={editDialog} onsave={edit} />
+<DeleteApplicationDialog bind:this={deleteDialog} ondelete={remove} />
+<div class="toast toast-bottom toast-end pointer-events-none z-50">{#if message}<NotificationToast text={message} />{/if}</div>

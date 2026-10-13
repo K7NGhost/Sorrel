@@ -71,7 +71,7 @@ mock.module("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: async (path: string) => { revealedPath = path; },
 }));
 
-const { createApplication, listApplications, moveApplication, updateApplicationDetails } = await import("../src/lib/features/applications/services/applications");
+const { createApplication, listApplications, moveApplication, updateApplicationDetails, updateApplication, deleteApplication } = await import("../src/lib/features/applications/services/applications");
 const { listDocuments, openDocument, saveDocumentCopy, uploadDocuments, revealDocument, moveDocument } = await import("../src/lib/features/profile/services/documents");
 const { createDocumentFolder, listDocumentFolders } = await import("../src/lib/features/profile/services/folders");
 const { moveDocumentTreeItem, deleteDocumentTreeItem } = await import("../src/lib/features/profile/services/tree");
@@ -501,4 +501,34 @@ test("Profile tree moves preserve stored copies and failed deletes restore them"
   expect((await listDocumentFolders()).some((folder) => [destination.id, child.id, nested.id].includes(folder.id))).toBe(false);
   expect(existsSync(copy)).toBe(false);
   expect(readFileSync(source, "utf8")).toBe("Original document bytes");
+});
+
+
+test("editing a job preserves status and position, and deleting targets only that job", async () => {
+  const original = await createApplication({ company: "Edit original", role: "Engineer", notes: "Old notes", applied_on: "2026-10-12", job_description: "Old description" });
+  const unrelated = await createApplication({ company: "Keep this job", role: "Designer", notes: "", applied_on: "2026-10-12" });
+  await moveApplication(original.id, "accepted");
+  const input = { company: "  Edited company  ", role: "Senior engineer", notes: "Updated notes", applied_on: "2026-09-22", job_description: "Updated requirements" };
+  const details = await updateApplication(original.id, input);
+  sqlite.close();
+  sqlite = new Database(path);
+  const edited = (await listApplications()).find((job) => job.id === original.id)!;
+  expect(edited.company).toBe("Edited company");
+  expect(edited.role).toBe(input.role);
+  expect(edited.applied_on).toBe(input.applied_on);
+  expect(edited.job_description).toBe(input.job_description);
+  expect(edited.status).toBe("accepted");
+  expect(edited.sort_order).toBe(original.sort_order);
+  expect(edited.created_at).toBe(original.created_at);
+  expect(edited.updated_at).toBe(details.updated_at);
+  await expect(updateApplication(original.id, { ...input, applied_on: "2026-02-30" })).rejects.toThrow("date");
+  await expect(updateApplication(original.id, { ...input, company: " " })).rejects.toThrow("company");
+  await expect(updateApplication("missing", input)).rejects.toThrow("could not be found");
+  expect((await listApplications()).find((job) => job.id === original.id)?.company).toBe("Edited company");
+  await deleteApplication(original.id);
+  sqlite.close();
+  sqlite = new Database(path);
+  expect((await listApplications()).some((job) => job.id === original.id)).toBe(false);
+  expect((await listApplications()).find((job) => job.id === unrelated.id)?.company).toBe("Keep this job");
+  await expect(deleteApplication(original.id)).rejects.toThrow("could not be found");
 });

@@ -35,6 +35,18 @@ test.beforeEach(async ({ page }) => {
         if (command === "plugin:sql|execute") {
           await new Promise((resolve) => setTimeout(resolve, 100));
           if (fixture.failNextSave) { fixture.failNextSave = false; throw new Error("Simulated SQLite failure"); }
+          if (args.query.startsWith("UPDATE applications SET company")) {
+            const [company, role, notes, applied_on, job_description, updated_at, id] = args.values;
+            const application = fixture.applications.find((item) => item.id === id)!;
+            Object.assign(application, { company, role, notes, applied_on, job_description, updated_at });
+            localStorage.setItem("test-job-applications", JSON.stringify(fixture.applications));
+            return [1, 0];
+          }
+          if (args.query.startsWith("DELETE FROM applications")) {
+            fixture.applications = fixture.applications.filter((item) => item.id !== args.values[0]);
+            localStorage.setItem("test-job-applications", JSON.stringify(fixture.applications));
+            return [1, 0];
+          }
           if (args.query.startsWith("UPDATE applications SET notes")) {
             const [notes, job_description, updated_at, id] = args.values;
             const application = fixture.applications.find((item) => item.id === id)!;
@@ -221,4 +233,57 @@ test("new applications save a pasted job description and failed edits retain the
   await expect(dialog.getByRole("textbox", { name: "Job description", exact: true })).toHaveValue("Updated requirements.");
   await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(dialog).not.toBeVisible();
+});
+
+
+test("context-menu Edit updates all job fields and failed saves keep edits", async ({ page }) => {
+  await page.getByRole("button", { name: "View details for Alpha", exact: true }).focus();
+  await page.keyboard.press("Shift+F10");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "Edit", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Edit application", exact: true });
+  await expect(dialog.getByRole("textbox", { name: "Company *", exact: true })).toHaveValue("Alpha");
+  await dialog.getByRole("textbox", { name: "Company *", exact: true }).fill("Alpha Updated");
+  await dialog.getByRole("textbox", { name: "Role", exact: true }).fill("Senior Engineer");
+  await dialog.getByLabel("Date applied *", { exact: true }).fill("2026-09-22");
+  await dialog.getByRole("textbox", { name: "Notes", exact: true }).fill("Updated notes");
+  await dialog.getByRole("textbox", { name: "Job description", exact: true }).fill("Updated requirements");
+  await page.evaluate(() => window.__sorrelBoardTest.failNextSave = true);
+  await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Simulated SQLite failure");
+  await expect(dialog.getByRole("textbox", { name: "Company *", exact: true })).toHaveValue("Alpha Updated");
+  await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("list", { name: "Applied column", exact: true })).toContainText("Alpha Updated");
+  await expect(page.getByRole("list", { name: "Applied column", exact: true })).toContainText("Senior Engineer");
+  await expect(page.getByRole("list", { name: "Applied column", exact: true })).toContainText("Applied Sep 22, 2026");
+  await page.reload();
+  await page.getByRole("button", { name: "View details for Alpha Updated", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+  await expect(dialog.getByRole("textbox", { name: "Job description", exact: true })).toHaveValue("Updated requirements");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+});
+
+test("context-menu Delete confirms removal and failed deletes leave the card", async ({ page }) => {
+  const card = page.getByRole("button", { name: "View details for Alpha", exact: true });
+  await card.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete application?", exact: true });
+  await expect(dialog).toContainText("Alpha");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(card).toBeVisible();
+  await card.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+  await page.evaluate(() => window.__sorrelBoardTest.failNextSave = true);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Simulated SQLite failure");
+  await expect(card).toBeVisible();
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(card).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View details for Beta", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(card).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View details for Beta", exact: true })).toBeVisible();
 });

@@ -6,7 +6,7 @@ export async function listApplications(): Promise<JobApplication[]> {
   return db.select<JobApplication[]>("SELECT * FROM applications ORDER BY sort_order ASC, created_at DESC, id DESC");
 }
 
-export async function createApplication(input: NewApplication): Promise<JobApplication> {
+function validateApplication(input: NewApplication) {
   const company = input.company.trim();
   if (!company) throw new Error("Enter a company name.");
   const appliedDate = new Date(`${input.applied_on}T00:00:00Z`);
@@ -15,15 +15,16 @@ export async function createApplication(input: NewApplication): Promise<JobAppli
     || appliedDate.toISOString().slice(0, 10) !== input.applied_on) {
     throw new Error("Enter a valid application date.");
   }
-
-  const now = new Date().toISOString();
+  if (company.length > 200 || input.role.trim().length > 200) throw new Error("Keep company and role names under 200 characters.");
   validateDetails(input.notes, input.job_description ?? "");
+  return { company, role: input.role.trim(), notes: input.notes.trim(), job_description: (input.job_description ?? "").trim(), applied_on: input.applied_on };
+}
+
+export async function createApplication(input: NewApplication): Promise<JobApplication> {
+  const fields = validateApplication(input);
+  const now = new Date().toISOString();
   const application: JobApplication = {
-    ...input,
-    company,
-    role: input.role.trim(),
-    notes: input.notes.trim(),
-    job_description: (input.job_description ?? "").trim(),
+    ...fields,
     id: crypto.randomUUID(),
     status: "applied",
     created_at: now,
@@ -34,10 +35,24 @@ export async function createApplication(input: NewApplication): Promise<JobAppli
   await db.execute(
     `INSERT INTO applications (id, company, role, notes, status, applied_on, created_at, updated_at, sort_order, job_description)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [application.id, company, application.role, application.notes, application.status,
+    [application.id, application.company, application.role, application.notes, application.status,
       application.applied_on, now, now, application.sort_order, application.job_description],
   );
   return application;
+}
+
+export async function updateApplication(id: string, input: NewApplication): Promise<Pick<JobApplication, "company" | "role" | "notes" | "job_description" | "applied_on" | "updated_at">> {
+  const fields = { ...validateApplication(input), updated_at: new Date().toISOString() };
+  const db = await getDatabase();
+  const result = await db.execute("UPDATE applications SET company = $1, role = $2, notes = $3, applied_on = $4, job_description = $5, updated_at = $6 WHERE id = $7", [fields.company, fields.role, fields.notes, fields.applied_on, fields.job_description, fields.updated_at, id]);
+  if (result.rowsAffected !== 1) throw new Error("This application could not be found. Reload the board.");
+  return fields;
+}
+
+export async function deleteApplication(id: string): Promise<void> {
+  const db = await getDatabase();
+  const result = await db.execute("DELETE FROM applications WHERE id = $1", [id]);
+  if (result.rowsAffected !== 1) throw new Error("This application could not be found. Reload the board.");
 }
 
 function validateDetails(notes: string, description: string) {
