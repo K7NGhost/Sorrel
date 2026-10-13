@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sorrel",
+  "version": "0.1.0",
+  "identifier": "com.k7nghost.sorrel",
+  "build": {
+    "beforeDevCommand": "bun run setup:tectonic && bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run setup:tectonic && bun run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Sorrel",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 480,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/tectonic"],
+    "resources": ["binaries/TECTONIC-LICENSE.txt"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

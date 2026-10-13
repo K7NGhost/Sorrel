@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      // Restore the saved theme before the page paints.
+      let theme = "light";
+      try {
+        const saved = localStorage.getItem("sorrel-theme");
+        if (saved === "light" || saved === "obsidian") theme = saved;
+      } catch {
+        // The theme switch still works when local storage is unavailable.
+      }
+      document.documentElement.setAttribute("data-theme", theme);
+    </script>
+    <title>Sorrel — Job applications</title>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>
