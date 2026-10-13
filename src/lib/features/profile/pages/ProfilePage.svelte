@@ -1,14 +1,21 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { isTauri } from "@tauri-apps/api/core";
   import DocumentCard from "../components/DocumentCard.svelte";
-  import { listDocuments, openDocument, saveDocumentCopy, uploadDocuments, revealDocument, moveDocument } from "../services/documents";
+  import { listDocuments, openDocument, saveDocumentCopy, uploadDocuments, revealDocument } from "../services/documents";
   import { listDocumentFolders, createDocumentFolder, documentFolderPath } from "../services/folders";
+  import ResizablePanel from "$lib/shared/components/ResizablePanel.svelte";
+  import TreeActions from "$lib/shared/components/TreeActions.svelte";
+  import NotificationToast from "$lib/shared/components/NotificationToast.svelte";
+  import { descendantFolderIds, type TreeItem } from "$lib/shared/services/tree";
+  import { moveDocumentTreeItem, deleteDocumentTreeItem } from "../services/tree";
   import DocumentFolderTree from "../components/DocumentFolderTree.svelte";
   import FolderPlus from "@lucide/svelte/icons/folder-plus";
   import type { DocumentKind, SavedDocument, DocumentFolder } from "../types";
 
   let documents = $state<SavedDocument[]>([]);
+  let selectedDocumentId = $state("");
+  let treeActions: TreeActions;
   let folders = $state<DocumentFolder[]>([]);
   let selectedFolderId = $state<string | null>(null);
   let folderDialog: HTMLDialogElement;
@@ -38,6 +45,7 @@
     try {
       [documents, folders] = await Promise.all([listDocuments(), listDocumentFolders()]);
       if (selectedFolderId !== null && !folders.some((folder) => folder.id === selectedFolderId)) selectedFolderId = null;
+      if (!documents.some((document) => document.id === selectedDocumentId)) selectedDocumentId = "";
       ready = true;
     } catch {
       error = "Could not load your documents. Please try again.";
@@ -65,6 +73,7 @@
 
   function selectFolder(id: string | null) {
     selectedFolderId = id;
+    selectedDocumentId = "";
     search = "";
   }
 
@@ -91,18 +100,70 @@
     finally { busy = false; }
   }
 
-  async function move(document: SavedDocument, folderId: string | null) {
-    if (busy || document.folder_id === folderId) return;
+  async function selectDocument(document: SavedDocument) {
+    if (busy) return;
+    selectedFolderId = document.folder_id;
+    selectedDocumentId = document.id;
+    search = "";
+    await tick();
+    window.document.getElementById(`document-${document.id}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  async function relocate(item: TreeItem, destination: string | null) {
+    if (busy || !ready) throw new Error("Please wait until the library is ready.");
+    const document = documents.find((document) => document.id === item.id);
+    const folder = folders.find((folder) => folder.id === item.id);
+    if ((item.kind === "file" && document?.folder_id === destination) || (item.kind === "folder" && folder?.parent_id === destination)) return;
     busy = true;
     error = message = "";
     try {
-      const moved = await moveDocument(document, folderId);
-      documents = documents.map((item) => item.id === moved.id ? moved : item);
-      message = `${document.name} moved to ${documentFolderPath(folderId, folders)}.`;
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : "Could not move your document.";
-      documents = documents.map((item) => ({ ...item }));
+      await moveDocumentTreeItem(item, destination);
+      if (item.kind === "file") {
+        documents = documents.map((document) => document.id === item.id ? { ...document, folder_id: destination } : document);
+        selectedFolderId = destination;
+        selectedDocumentId = item.id;
+      } else {
+        folders = folders.map((folder) => folder.id === item.id ? { ...folder, parent_id: destination } : folder);
+        selectFolder(item.id);
+      }
+      search = "";
+      message = "Item moved.";
     } finally { busy = false; }
+  }
+
+  async function move(document: SavedDocument, destination: string | null) {
+    if (busy) return;
+    try { await relocate({ kind: "file", id: document.id }, destination); }
+    catch (cause) {
+      error = cause instanceof Error ? cause.message : "Could not move your document.";
+      documents = documents.map((document) => ({ ...document }));
+    }
+  }
+
+  async function removeItem(item: TreeItem) {
+    if (busy || !ready) throw new Error("Please wait until the library is ready.");
+    busy = true;
+    error = message = "";
+    try {
+      const removedFolders = item.kind === "folder" ? descendantFolderIds(item.id, folders) : new Set<string>();
+      const result = await deleteDocumentTreeItem(item);
+      const deletedIds = new Set(documents.filter((document) => item.kind === "file" ? document.id === item.id : document.folder_id !== null && removedFolders.has(document.folder_id)).map((document) => document.id));
+      documents = documents.filter((document) => !deletedIds.has(document.id));
+      folders = folders.filter((folder) => !removedFolders.has(folder.id));
+      if (selectedFolderId !== null && removedFolders.has(selectedFolderId)) selectFolder(null);
+      if (deletedIds.has(selectedDocumentId)) selectedDocumentId = "";
+      message = "Item deleted.";
+      if (result.cleanupFailed) error = "Removed from your library, but some saved copies remain in the app's trash folder.";
+    } finally { busy = false; }
+  }
+
+  function contextOpen(item: TreeItem) {
+    const document = documents.find((document) => document.id === item.id);
+    if (document) void open(document);
+  }
+  function contextReveal(item: TreeItem) {
+    const document = documents.find((document) => document.id === item.id);
+    if (document) void reveal(document);
   }
 
   async function open(document: SavedDocument) {
@@ -130,8 +191,8 @@
 
 <svelte:head><title>Profile — Sorrel</title></svelte:head>
 
-<main class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-6 lg:p-10">
-  <div class="flex flex-wrap items-start justify-between gap-4">
+<main class="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-hidden p-4 lg:p-6">
+  <div class="flex shrink-0 flex-wrap items-start justify-between gap-4">
     <div><h1 class="text-3xl font-bold">Profile & documents</h1><p class="mt-2">Keep your resume and application documents within reach.</p></div>
     <div class="flex flex-wrap gap-2">
       <button class="btn btn-ghost" disabled={!desktop || loading || busy} onclick={load}>Refresh</button>
@@ -140,17 +201,13 @@
     </div>
   </div>
   {#if !desktop && !loading}<div class="alert alert-info" role="status">Open the desktop app to upload and access your documents.</div>{/if}
-  {#if error}<div class="alert alert-error" role="alert"><span>{error}</span>{#if !ready}<button class="btn btn-sm" disabled={loading} onclick={load}>Try again</button>{/if}</div>{/if}
-  {#if message}<div class="alert alert-success" role="status">{message}</div>{/if}
-  <div class="card bg-base-200">
-    <div class="card-body gap-2"><h2 class="card-title">Your career toolkit</h2><p>Added files are copied into the app's AppData library. Use Open file location to select a saved copy in File Explorer and attach it to an application.</p></div>
-  </div>
-  <div class="grid items-start gap-6 md:grid-cols-[14rem_minmax(0,1fr)]">
-    <aside class="card card-border min-w-0 bg-base-200" aria-label="Profile folders">
-      <div class="flex items-center justify-between gap-2 border-b border-base-300 p-3"><h2 class="font-semibold">Folders</h2><button class="btn btn-sm btn-square btn-ghost" aria-label="New folder" title="Create a folder" disabled={!ready || busy} onclick={() => { folderName = folderError = ""; folderDialog.showModal(); }}><FolderPlus size={18} aria-hidden="true" /></button></div>
-      <DocumentFolderTree {folders} selectedId={selectedFolderId} disabled={!ready || busy} onselect={selectFolder} />
-    </aside>
-    <section class="flex min-w-0 flex-col gap-4" aria-label="Document library">
+  <p class="shrink-0 text-sm">Added files are copied into the app's AppData library. Open file location selects a saved copy in File Explorer.</p>
+  <div class="flex min-h-0 flex-1 overflow-x-auto">
+    <ResizablePanel storageKey="sorrel-profile-tree-width" panelId="profile-file-panel" label="Profile files" initialWidth={224}>
+      <div class="flex items-center justify-between gap-2 border-b border-base-300 p-3"><h2 class="font-semibold">Files</h2><button class="btn btn-sm btn-square btn-ghost" aria-label="New folder" title="Create a folder" disabled={!ready || busy} onclick={() => { folderName = folderError = ""; folderDialog.showModal(); }}><FolderPlus size={18} aria-hidden="true" /></button></div>
+      <DocumentFolderTree {documents} {folders} {selectedDocumentId} selectedId={selectedFolderId} disabled={!ready || busy} onselect={selectFolder} onselectfile={selectDocument} oncontext={(item, event) => treeActions.open(item, event)} onmove={(item, destination) => { void relocate(item, destination).catch((cause) => error = cause instanceof Error ? cause.message : "Could not move this item."); }} />
+    </ResizablePanel>
+    <section class="flex min-h-0 min-w-[20rem] flex-1 flex-col gap-4 overflow-y-auto px-4" aria-label="Document library">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="font-semibold break-words">{search.trim() ? "Search results" : documentFolderPath(selectedFolderId, folders)}</h2>
         <span class="badge badge-ghost">{filtered.length} {filtered.length === 1 ? "document" : "documents"}</span>
@@ -166,7 +223,7 @@
       {:else}
         <div class="grid gap-4 xl:grid-cols-2" aria-busy={busy}>
           {#each filtered as document (document.id)}
-            <DocumentCard {document} {folders} disabled={busy} onopen={open} onsave={saveCopy} onreveal={reveal} onmove={move} />
+            <DocumentCard {document} {folders} selected={document.id === selectedDocumentId} disabled={busy} onopen={open} onsave={saveCopy} onreveal={reveal} onmove={move} />
           {/each}
         </div>
       {/if}
@@ -179,7 +236,14 @@
     <h2 id="new-document-folder-title" class="card-title"><FolderPlus size={20} aria-hidden="true" />New folder</h2>
     <p class="mt-2 break-words text-sm">Create in {documentFolderPath(selectedFolderId, folders)}</p>
     <label class="input mt-4 w-full"><span class="label">Name</span><input aria-label="Folder name" bind:value={folderName} required maxlength="200" disabled={busy} /></label>
-    {#if folderError}<p class="mt-3 text-error" role="alert">{folderError}</p>{/if}
     <div class="modal-action"><button type="button" class="btn btn-ghost" disabled={busy} onclick={() => folderDialog.close()}>Cancel</button><button type="submit" class="btn btn-primary" disabled={busy || !folderName.trim()}>Create folder</button></div>
   </form>
+  <div class="toast toast-bottom toast-end pointer-events-none">{#if folderError}<NotificationToast text={folderError} kind="error" duration={10000} />{/if}</div>
 </dialog>
+
+<TreeActions bind:this={treeActions} files={documents} {folders} activeFileId={selectedDocumentId} activeName={documents.find((document) => document.id === selectedDocumentId)?.name ?? ""} dirty={false} disabled={!ready || busy} rootLabel="Documents" deleteNote="This deletes the saved copies in the app. Your original uploaded files are kept." onmove={relocate} ondelete={removeItem} onopen={contextOpen} onreveal={contextReveal} />
+
+<div class="toast toast-bottom toast-end pointer-events-none z-50" aria-label="Profile notifications">
+  {#if message}<NotificationToast text={message} />{/if}
+  {#if error}<NotificationToast text={error} kind="error" duration={ready ? 10000 : 0} actionLabel={!ready ? "Try again" : ""} onaction={() => { if (!loading) void load(); }} />{/if}
+</div>

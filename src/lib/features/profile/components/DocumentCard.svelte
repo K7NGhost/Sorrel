@@ -5,10 +5,11 @@
   import { documentFolderPath } from "../services/folders";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
 
-  let { document, folders, disabled, onopen, onsave, onreveal, onmove }: {
+  let { document, folders, disabled, selected = false, onopen, onsave, onreveal, onmove }: {
     document: SavedDocument;
     folders: DocumentFolder[];
     disabled: boolean;
+    selected?: boolean;
     onopen: (document: SavedDocument) => Promise<void>;
     onsave: (document: SavedDocument) => Promise<void>;
     onreveal: (document: SavedDocument) => Promise<void>;
@@ -20,7 +21,7 @@
     : `${(document.size_bytes / (1024 * 1024)).toFixed(1)} MB`);
 </script>
 
-<article class="card card-border bg-base-100">
+<article id={`document-${document.id}`} class="card card-border bg-base-100" class:border-primary={selected} aria-label={`Document ${document.name}`}>
   <div class="card-body gap-4">
     <div class="flex items-start gap-3">
       <span class="btn btn-square btn-soft pointer-events-none" aria-hidden="true"><Icon name="file" /></span>

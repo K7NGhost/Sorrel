@@ -9,7 +9,7 @@ import { libraryDirectory, storedFilename, isLegacyFilename } from "./storage";
 
 let migration: Promise<void> | undefined;
 
-async function documentPath(document: SavedDocument) {
+export async function documentPath(document: SavedDocument) {
   // Stored names are generated here, never accepted as arbitrary paths.
   if (!isLegacyFilename(document.stored_name) && document.stored_name !== storedFilename(document.name, document.id)) {
     throw new Error("This document has an invalid storage path.");

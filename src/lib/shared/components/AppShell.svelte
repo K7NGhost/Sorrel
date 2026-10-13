@@ -7,7 +7,7 @@
 
   let { children }: { children: Snippet } = $props();
   let expanded = $state(false);
-  let boundedPage = $derived(page.url.pathname === "/" || page.url.pathname.replace(/\/$/, "") === "/resume-builder");
+  let boundedPage = $derived(page.url.pathname === "/" || ["/resume-builder", "/profile"].includes(page.url.pathname.replace(/\/$/, "")));
   const links = [
     { href: "/", label: "Applications", icon: "board" },
     { href: "/stats", label: "Stats", icon: "chart" },

@@ -2,8 +2,8 @@
 
 import { afterAll, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFile, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { basename, join, normalize } from "node:path";
 
 const path = join(import.meta.dir, `applications-${crypto.randomUUID()}.db`);
@@ -17,6 +17,7 @@ sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/006_resu
 sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/007_document_folders.sql"), "utf8"));
 sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/008_job_description.sql"), "utf8"));
 sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/009_resume_folder_delete.sql"), "utf8"));
+sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/010_document_folder_delete.sql"), "utf8"));
 const fixtureDirectory = mkdtempSync(join(import.meta.dir, "documents-"));
 const appData = join(fixtureDirectory, "app-data");
 let selectedFiles: string | string[] | null = null;
@@ -25,6 +26,7 @@ let openedPath = "";
 let revealedPath = "";
 let rejectDocumentInsert = false;
 let rejectDocumentNameUpdate = false;
+let rejectDocumentDelete = false;
 
 // Exercise the production queries against SQLite; only the native transport is replaced.
 mock.module("$lib/shared/services/database", () => ({
@@ -33,6 +35,7 @@ mock.module("$lib/shared/services/database", () => ({
     execute: async (sql: string, values: (string | number | null)[]) => {
       if (rejectDocumentInsert && sql.startsWith("INSERT INTO documents")) throw new Error("Simulated write failure");
       if (rejectDocumentNameUpdate && sql.startsWith("UPDATE documents SET stored_name")) throw new Error("Simulated name update failure");
+      if (rejectDocumentDelete && (sql.startsWith("DELETE FROM documents") || sql.startsWith("DELETE FROM document_folders"))) throw new Error("Simulated document deletion failure");
       const result = sqlite.query(sql).run(...values);
       return { rowsAffected: result.changes, lastInsertId: result.lastInsertRowid };
     },
@@ -52,7 +55,9 @@ mock.module("@tauri-apps/plugin-dialog", () => ({
 mock.module("@tauri-apps/plugin-fs", () => ({
   copyFile,
   mkdir,
-  remove: rm,
+  remove: async (path: string) => (await stat(path)).isDirectory() ? rmdir(path) : rm(path),
+  rename,
+  exists: async (path: string) => existsSync(path),
   readTextFile: (path: string) => readFile(path, "utf8"),
   writeTextFile: (path: string, contents: string) => writeFile(path, contents, "utf8"),
   writeFile: (path: string, contents: Uint8Array) => writeFile(path, contents),
@@ -69,6 +74,7 @@ mock.module("@tauri-apps/plugin-opener", () => ({
 const { createApplication, listApplications, moveApplication, updateApplicationDetails } = await import("../src/lib/features/applications/services/applications");
 const { listDocuments, openDocument, saveDocumentCopy, uploadDocuments, revealDocument, moveDocument } = await import("../src/lib/features/profile/services/documents");
 const { createDocumentFolder, listDocumentFolders } = await import("../src/lib/features/profile/services/folders");
+const { moveDocumentTreeItem, deleteDocumentTreeItem } = await import("../src/lib/features/profile/services/tree");
 const { summarizeApplications } = await import("../src/lib/features/stats/services/stats");
 const { planPlacement } = await import("../src/lib/features/applications/state/placement");
 const { loadDraft, saveDraft, listDrafts } = await import("../src/lib/features/resume-builder/services/drafts");
@@ -465,4 +471,34 @@ test("resume tree moves reject cycles and folder deletion is atomic", async () =
   expect((await loadDraft(outside.id))?.source).toBe("Unrelated source");
   await deleteTreeItem({ kind: "file", id: outside.id });
   expect(await loadDraft(outside.id)).toBeNull();
+});
+
+
+test("Profile tree moves preserve stored copies and failed deletes restore them", async () => {
+  const parent = await createDocumentFolder("Profile tree source", null);
+  const destination = await createDocumentFolder("Profile tree destination", null);
+  const child = await createDocumentFolder("Tree child", parent.id);
+  const nested = await createDocumentFolder("Nested", child.id);
+  const source = join(fixtureDirectory, "profile-tree.pdf");
+  writeFileSync(source, "Original document bytes");
+  selectedFiles = [source];
+  const document = (await uploadDocuments("document", nested.id)).documents[0];
+  const copy = join(appData, "documents", document.stored_name);
+  await moveDocumentTreeItem({ kind: "folder", id: child.id }, destination.id);
+  expect((await listDocumentFolders()).find((folder) => folder.id === child.id)?.parent_id).toBe(destination.id);
+  await expect(moveDocumentTreeItem({ kind: "folder", id: destination.id }, nested.id)).rejects.toThrow("subfolders");
+  await moveDocumentTreeItem({ kind: "file", id: document.id }, child.id);
+  expect((await listDocuments()).find((file) => file.id === document.id)?.folder_id).toBe(child.id);
+  expect(readFileSync(copy, "utf8")).toBe("Original document bytes");
+  rejectDocumentDelete = true;
+  try { await expect(deleteDocumentTreeItem({ kind: "folder", id: destination.id })).rejects.toThrow("Simulated document deletion failure"); }
+  finally { rejectDocumentDelete = false; }
+  expect(readFileSync(copy, "utf8")).toBe("Original document bytes");
+  expect((await listDocuments()).some((file) => file.id === document.id)).toBe(true);
+  expect((await listDocumentFolders()).some((folder) => folder.id === nested.id)).toBe(true);
+  expect((await deleteDocumentTreeItem({ kind: "folder", id: destination.id })).cleanupFailed).toBe(false);
+  expect((await listDocuments()).some((file) => file.id === document.id)).toBe(false);
+  expect((await listDocumentFolders()).some((folder) => [destination.id, child.id, nested.id].includes(folder.id))).toBe(false);
+  expect(existsSync(copy)).toBe(false);
+  expect(readFileSync(source, "utf8")).toBe("Original document bytes");
 });

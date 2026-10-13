@@ -1,21 +1,9 @@
 import { getDatabase } from "$lib/shared/services/database";
 import { listFolders } from "./folders";
-import type { ResumeFolder, ResumeTreeItem } from "../types";
+import type { ResumeTreeItem } from "../types";
 
-export function descendantFolderIds(id: string, folders: ResumeFolder[]): Set<string> {
-  const descendants = new Set([id]);
-  const pending = [id];
-  while (pending.length) {
-    const parentId = pending.pop();
-    for (const folder of folders) {
-      if (folder.parent_id === parentId && !descendants.has(folder.id)) {
-        descendants.add(folder.id);
-        pending.push(folder.id);
-      }
-    }
-  }
-  return descendants;
-}
+export { descendantFolderIds } from "$lib/shared/services/tree";
+import { descendantFolderIds } from "$lib/shared/services/tree";
 
 export async function moveTreeItem(item: ResumeTreeItem, destination: string | null): Promise<void> {
   const folders = await listFolders();
