@@ -12,4 +12,6 @@ export interface ResumeFolder {
   parent_id: string | null;
 }
 
+export type ResumeTreeItem = { kind: "file" | "folder"; id: string };
+
 export const MAX_SOURCE_BYTES = 1024 * 1024;

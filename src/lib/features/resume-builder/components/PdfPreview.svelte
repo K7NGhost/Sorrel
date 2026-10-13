@@ -3,7 +3,7 @@
   import type { PDFDocumentProxy, PDFDocumentLoadingTask, RenderTask } from "pdfjs-dist";
   import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-  let { data }: { data: Uint8Array } = $props();
+  let { data, onerror }: { data: Uint8Array; onerror?: (message: string) => void } = $props();
   let canvas = $state<HTMLCanvasElement>();
   let pdf = $state<PDFDocumentProxy>();
   let pageNumber = $state(1);
@@ -14,6 +14,8 @@
   let loading = $state(false);
   let error = $state("");
   let text = $state("");
+  $effect(() => { if (error) onerror?.(error); });
+
   let task: PDFDocumentLoadingTask | undefined;
   let renderingTask: RenderTask | undefined;
   let renderQueue = Promise.resolve();
@@ -102,7 +104,6 @@
     </div>
     <label class="select select-sm w-40"><span class="sr-only">PDF zoom</span><select aria-label="PDF zoom" bind:value={zoom}><option value="fit">Fit to container</option><option value="width">Fit width</option><option value="75">75%</option><option value="100">100%</option><option value="125">125%</option><option value="150">150%</option></select></label>
   </div>
-  {#if error}<div class="alert alert-error" role="alert">{error}</div>{/if}
   {#if loading}<p role="status" class="flex items-center gap-2"><span class="loading loading-spinner loading-xs"></span>Loading PDF…</p>{/if}
   <div bind:this={container} class="min-h-0 flex-1 overflow-auto rounded-box" data-testid="pdf-viewport">
     <canvas bind:this={canvas} aria-label={`Resume PDF page ${pageNumber}`} class="mx-auto my-2 block bg-white shadow-sm"></canvas>

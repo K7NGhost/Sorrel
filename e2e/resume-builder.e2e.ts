@@ -26,6 +26,29 @@ test.beforeEach(async ({ page }) => {
           return JSON.parse(localStorage.getItem("test-resume-files") ?? "[]");
         }
         if (command === "plugin:sql|execute") {
+          const folders = JSON.parse(localStorage.getItem("test-resume-folders") ?? "[]") as { id: string; name: string; parent_id: string | null }[];
+          const savedFiles = JSON.parse(localStorage.getItem("test-resume-files") ?? "[]") as { id: string; folder_id: string | null }[];
+          if (args.query?.startsWith("UPDATE resume_")) {
+            if (localStorage.getItem("test-resume-fail-move")) { localStorage.removeItem("test-resume-fail-move"); throw "Simulated move failure"; }
+            const [destination, id] = args.values ?? [];
+            if (args.query.startsWith("UPDATE resume_folders")) localStorage.setItem("test-resume-folders", JSON.stringify(folders.map((folder) => folder.id === id ? { ...folder, parent_id: destination } : folder)));
+            else localStorage.setItem("test-resume-files", JSON.stringify(savedFiles.map((file) => file.id === id ? { ...file, folder_id: destination } : file)));
+            return [1, 0];
+          }
+          if (args.query?.startsWith("DELETE FROM resume_")) {
+            const [id] = args.values ?? [];
+            if (args.query.startsWith("DELETE FROM resume_folders")) {
+              const deleted = new Set([id]);
+              let changed = true;
+              while (changed) {
+                changed = false;
+                for (const folder of folders) if (deleted.has(folder.parent_id) && !deleted.has(folder.id)) { deleted.add(folder.id); changed = true; }
+              }
+              localStorage.setItem("test-resume-folders", JSON.stringify(folders.filter((folder) => !deleted.has(folder.id))));
+              localStorage.setItem("test-resume-files", JSON.stringify(savedFiles.filter((file) => !deleted.has(file.folder_id))));
+            } else localStorage.setItem("test-resume-files", JSON.stringify(savedFiles.filter((file) => file.id !== id)));
+            return [1, 0];
+          }
           if (args.query?.includes("INSERT INTO resume_folders")) {
             const [id, name, parent_id] = args.values ?? [];
             const folders = JSON.parse(localStorage.getItem("test-resume-folders") ?? "[]");
@@ -197,4 +220,111 @@ test("forks copy latest edits independently and folders organize files across re
   await expect(page.getByRole("combobox", { name: "Move resume to folder" }).locator('option:checked')).toHaveText("Resumes / Applications / Engineering");
   await page.getByRole("button", { name: "Jordan CV.tex", exact: true }).click();
   await expect(editor).toContainText("Original edits");
+});
+
+
+async function addTreeFolder(page: import("@playwright/test").Page, name: string) {
+  await page.getByRole("button", { name: "New folder", exact: true }).click();
+  await page.getByRole("textbox", { name: "Folder name", exact: true }).fill(name);
+  await page.getByRole("button", { name: "Create folder", exact: true }).click();
+  await expect(page.getByRole("button", { name: `Folder ${name}`, exact: true })).toBeVisible();
+}
+
+test("file tree resize supports pointer and keyboard and remembers its width", async ({ page }) => {
+  await page.goto("/resume-builder");
+  const panel = page.getByRole("complementary", { name: "LaTeX files" });
+  const handle = page.getByRole("separator", { name: "Resize file tree" });
+  const before = (await panel.boundingBox())!.width;
+  const bounds = (await handle.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 120, bounds.y + bounds.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(handle).toHaveAttribute("aria-valuenow", String(before + 120));
+  await handle.press("ArrowRight");
+  await expect(handle).toHaveAttribute("aria-valuenow", String(before + 136));
+  await page.reload();
+  await expect(handle).toHaveAttribute("aria-valuenow", String(before + 136));
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBe(before + 136);
+});
+
+test("dragging files saves current edits, persists moves, and rolls back failed moves", async ({ page }) => {
+  await page.goto("/resume-builder");
+  await addTreeFolder(page, "Engineering");
+  const editor = page.getByRole("textbox", { name: "LaTeX resume source" });
+  await editor.fill(`${resume}\n% Latest edits`);
+  const file = page.getByRole("button", { name: "My resume.tex", exact: true });
+  await file.dragTo(page.getByRole("button", { name: "Folder Engineering", exact: true }));
+  await expect(page.getByText("Item moved.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Move resume to folder" }).locator("option:checked")).toHaveText("Resumes / Engineering");
+  await expect(editor).toContainText("Latest edits");
+  await page.reload();
+  await expect(editor).toContainText("Latest edits");
+  await expect(page.getByRole("combobox", { name: "Move resume to folder" }).locator("option:checked")).toHaveText("Resumes / Engineering");
+  await page.evaluate(() => localStorage.setItem("test-resume-fail-move", "true"));
+  await file.dragTo(page.getByRole("button", { name: "Folder Resumes", exact: true }));
+  await expect(page.getByRole("alert")).toContainText("Simulated move failure");
+  await expect(page.getByRole("combobox", { name: "Move resume to folder" }).locator("option:checked")).toHaveText("Resumes / Engineering");
+  await file.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move...", exact: true }).click();
+  await page.getByRole("combobox", { name: "Destination folder" }).selectOption("");
+  await page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Move My resume.tex", exact: true }) }).getByRole("button", { name: "Move", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Move resume to folder" })).toHaveValue("");
+});
+
+test("folders drag into folders and deletion confirms contents and clears the last editor", async ({ page }) => {
+  await page.goto("/resume-builder");
+  await addTreeFolder(page, "Parent");
+  await page.getByRole("button", { name: "Folder Resumes", exact: true }).click();
+  await addTreeFolder(page, "Child");
+  await page.getByRole("button", { name: "Folder Child", exact: true }).dragTo(page.getByRole("button", { name: "Folder Parent", exact: true }));
+  await expect(page.getByText("Item moved.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Folder Child", exact: true }).click();
+  await page.getByRole("button", { name: "My resume.tex", exact: true }).dragTo(page.getByRole("button", { name: "Folder Child", exact: true }));
+  await page.getByRole("button", { name: "Folder Parent", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete...", exact: true }).click();
+  const confirmation = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Delete Parent?", exact: true }) });
+  await expect(confirmation).toContainText("1 subfolders, and 1 saved files");
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("button", { name: "My resume.tex", exact: true })).toBeVisible();
+  const folder = page.getByRole("button", { name: "Folder Parent", exact: true });
+  await folder.focus();
+  await folder.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Delete...", exact: true }).click();
+  await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Folder Parent", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "My resume.tex", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Select or create a .tex file to start editing.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save draft", exact: true })).toBeDisabled();
+  await page.reload();
+  await expect(page.getByText("Select or create a .tex file to start editing.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "New .tex", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "LaTeX resume source" })).toBeEditable();
+});
+
+
+test("save and error feedback uses dismissible toasts without shrinking the workspace", async ({ page }) => {
+  await page.goto("/resume-builder");
+  await expect(page.getByLabel("Resume PDF page 1")).toBeVisible({ timeout: 15000 });
+  const pane = page.getByTestId("resume-panes");
+  const original = (await pane.boundingBox())!;
+  const editor = page.getByRole("textbox", { name: "LaTeX resume source" });
+  await editor.fill(resume);
+  await expect(page.locator('.toast .alert-warning')).toContainText("Unsaved changes");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  const success = page.locator('.toast .alert-success');
+  await expect(success).toContainText("Resume draft saved.");
+  const saved = (await pane.boundingBox())!;
+  expect(saved.y).toBe(original.y);
+  expect(saved.height).toBe(original.height);
+  await success.getByRole("button", { name: "Dismiss notification" }).click();
+  await expect(success).not.toBeVisible();
+  await editor.fill("\\invalidresumecommand{Oops}");
+  const failure = page.locator('.toast .alert-error');
+  await expect(failure).toContainText("Undefined control sequence");
+  const failed = (await pane.boundingBox())!;
+  expect(failed.y).toBe(original.y);
+  expect(failed.height).toBe(original.height);
+  await failure.getByRole("button", { name: "Compiler output", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Compiler output" })).toContainText("Undefined control sequence");
 });

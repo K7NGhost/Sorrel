@@ -63,6 +63,12 @@ pub fn run() {
                             sql: include_str!("../migrations/008_job_description.sql"),
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 9,
+                            description: "resume_folder_delete",
+                            sql: include_str!("../migrations/009_resume_folder_delete.sql"),
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),

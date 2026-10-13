@@ -24,21 +24,21 @@
 <div class="drawer lg:drawer-open min-h-screen bg-base-100" class:h-dvh={boundedPage} class:overflow-hidden={boundedPage}>
   <input id="app-drawer" type="checkbox" class="drawer-toggle" bind:checked={expanded} aria-label="Expand sidebar" />
   <div class="drawer-content flex min-h-0 min-w-0 flex-col">
-    <header class="navbar bg-base-300 shrink-0 gap-2 px-4">
-      <button type="button" class="btn btn-square btn-ghost drawer-button" aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"} aria-expanded={expanded} aria-controls="app-sidebar" onclick={() => expanded = !expanded}>
+    <header class="navbar h-11 min-h-0 bg-base-300 shrink-0 gap-2 px-3 py-1">
+      <button type="button" class="btn btn-sm btn-square btn-ghost drawer-button" aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"} aria-expanded={expanded} aria-controls="app-sidebar" onclick={() => expanded = !expanded}>
         <Icon name="sidebar" />
       </button>
-      <div class="flex-1 px-2 font-semibold">{activePage}</div>
+      <div class="flex-1 px-1 text-sm font-semibold">{activePage}</div>
       <ThemeSwitcher />
-      <span class="badge badge-ghost">Sorrel</span>
+      <span class="badge badge-sm badge-ghost">Sorrel</span>
     </header>
     {@render children()}
   </div>
   <div class="drawer-side is-drawer-close:overflow-visible">
     <label for="app-drawer" aria-label="Close sidebar" class="drawer-overlay"></label>
     <aside id="app-sidebar" class="bg-base-200 flex min-h-full flex-col items-start is-drawer-close:w-14 is-drawer-open:w-64">
-      <a href="/" class="btn btn-ghost m-2 gap-3 px-2" aria-label="Sorrel applications">
-        <span class="badge badge-primary">S</span>
+      <a href="/" class="btn btn-ghost m-2 gap-3 px-2 is-drawer-close:w-10 is-drawer-close:px-1" aria-label="Sorrel applications">
+        <img src="/app-icon.png" alt="" class="size-8 shrink-0 object-contain" width="32" height="32" />
         <span class="is-drawer-close:hidden text-lg">Sorrel</span>
       </a>
       <nav class="w-full grow" aria-label="Main navigation">

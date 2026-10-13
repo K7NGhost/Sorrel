@@ -16,6 +16,7 @@ sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/005_resu
 sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/006_resume_folders.sql"), "utf8"));
 sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/007_document_folders.sql"), "utf8"));
 sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/008_job_description.sql"), "utf8"));
+sqlite.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/009_resume_folder_delete.sql"), "utf8"));
 const fixtureDirectory = mkdtempSync(join(import.meta.dir, "documents-"));
 const appData = join(fixtureDirectory, "app-data");
 let selectedFiles: string | string[] | null = null;
@@ -72,6 +73,7 @@ const { summarizeApplications } = await import("../src/lib/features/stats/servic
 const { planPlacement } = await import("../src/lib/features/applications/state/placement");
 const { loadDraft, saveDraft, listDrafts } = await import("../src/lib/features/resume-builder/services/drafts");
 const { createFolder, listFolders } = await import("../src/lib/features/resume-builder/services/folders");
+const { moveTreeItem, deleteTreeItem } = await import("../src/lib/features/resume-builder/services/tree");
 const { exportTex, importTex, saveToProfile, exportPdf, savePdfToProfile } = await import("../src/lib/features/resume-builder/services/files");
 
 afterAll(() => {
@@ -433,4 +435,34 @@ test("job description migration preserves existing application details", () => {
     legacy.exec(readFileSync(join(import.meta.dir, "../src-tauri/migrations/008_job_description.sql"), "utf8"));
     expect(legacy.query("SELECT company, notes, job_description FROM applications").get()).toEqual({ company: "Existing company", notes: "Existing notes", job_description: "" });
   } finally { legacy.close(); }
+});
+
+
+test("resume tree moves reject cycles and folder deletion is atomic", async () => {
+  sqlite.exec("PRAGMA foreign_keys = ON");
+  const parent = await createFolder("Tree source", null);
+  const destination = await createFolder("Tree destination", null);
+  const child = await createFolder("Child", parent.id);
+  const nested = await createFolder("Nested", child.id);
+  const file = await saveDraft("Tree resume", "Original source", crypto.randomUUID(), nested.id);
+  const outside = await saveDraft("Outside resume", "Unrelated source", crypto.randomUUID(), null);
+  await moveTreeItem({ kind: "folder", id: child.id }, destination.id);
+  expect((await listFolders()).find((folder) => folder.id === child.id)?.parent_id).toBe(destination.id);
+  await expect(moveTreeItem({ kind: "folder", id: destination.id }, nested.id)).rejects.toThrow("subfolders");
+  const duplicate = await createFolder("Child", parent.id);
+  await expect(moveTreeItem({ kind: "folder", id: duplicate.id }, destination.id)).rejects.toThrow("already exists");
+  await moveTreeItem({ kind: "file", id: outside.id }, child.id);
+  expect((await loadDraft(outside.id))?.folder_id).toBe(child.id);
+  await moveTreeItem({ kind: "file", id: outside.id }, null);
+  sqlite.exec("CREATE TEMP TRIGGER fail_tree_delete BEFORE DELETE ON resume_files BEGIN SELECT RAISE(ABORT, 'Simulated delete failure'); END");
+  try { await expect(deleteTreeItem({ kind: "folder", id: destination.id })).rejects.toThrow("Simulated delete failure"); }
+  finally { sqlite.exec("DROP TRIGGER fail_tree_delete"); }
+  expect((await loadDraft(file.id))?.source).toBe("Original source");
+  expect((await listFolders()).some((folder) => folder.id === nested.id)).toBe(true);
+  await deleteTreeItem({ kind: "folder", id: destination.id });
+  expect(await loadDraft(file.id)).toBeNull();
+  expect((await listFolders()).some((folder) => [destination.id, child.id, nested.id].includes(folder.id))).toBe(false);
+  expect((await loadDraft(outside.id))?.source).toBe("Unrelated source");
+  await deleteTreeItem({ kind: "file", id: outside.id });
+  expect(await loadDraft(outside.id)).toBeNull();
 });
